@@ -11,11 +11,6 @@ use MessageQueue::MessageQueue as messageQueue;
 
 use crate::MessageQueue::MessageResult;
 
-enum ErrorCode {
-    Succeeded,
-    Failed,
-}
-
 struct ContextQueue {
     stop: AtomicBool,
     mtx: Mutex<messageQueue<String>>,
@@ -50,19 +45,18 @@ fn main() {
             thread::sleep(time::Duration::from_millis(sleep_time));
             while !context_thread.stop.load(Ordering::Relaxed) {
                 let result: (Option<String>, MessageResult);
-                if is_non_blocking_pop(i) {
+                if is_non_blocking_pop(sleep_time.try_into().unwrap()) {
                     result = context_thread.mtx.lock().unwrap().pop::<false>();
-                } else if is_blocking_pop(i) {
+                } else if is_blocking_pop(sleep_time.try_into().unwrap()) {
                     result = context_thread.mtx.lock().unwrap().pop::<true>();
                 } else {
                     result = context_thread.mtx.lock().unwrap().get(&|message| {
-                        return message == "3";
+                        return message == "2";
                     });
                 }
-                if matches!(result.1,MessageResult::Ok){
+                if matches!(result.1, MessageResult::Ok) {
                     println!("pop operation succeeded");
-                }
-                else{
+                } else {
                     println!("pop operation errored");
                 }
             }
@@ -75,7 +69,7 @@ fn main() {
             let sleep_time = rand::thread_rng().gen_range(1..1000);
             thread::sleep(time::Duration::from_millis(sleep_time));
             while !context_thread.stop.load(Ordering::Relaxed) {
-                let result: MessageQueue::MessageResult;
+                let result: MessageResult;
                 if is_blocking_push(i) {
                     result = context_thread
                         .mtx
@@ -89,25 +83,29 @@ fn main() {
                         .unwrap()
                         .push::<false>(i.to_string());
                 }
-                if matches!(result,MessageResult::Ok){
+                if matches!(result, MessageResult::Ok) {
                     println!("push operation succeeded");
-                }
-                else{
+                } else {
                     println!("push operation errored");
                 }
             }
-
         }));
     }
-    thread::sleep(time::Duration::from_millis(5));
+
+    thread::sleep(time::Duration::from_millis(500));
     context.mtx.lock().unwrap().close();
     context.stop.store(true, Ordering::Relaxed);
-    for reader in readers{
-        //if(reader.join())
-        reader.join();
+
+    for reader in readers {
+        if (!reader.is_finished()) {
+            reader.join();
+        }
     }
-    for writer in writers{
-        writer.join();
+    for writer in writers {
+        if (!writer.is_finished()) {
+            writer.join();
+        }
     }
+
     println!("Program finish!");
 }

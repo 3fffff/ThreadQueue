@@ -1,23 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
-/*pub enum OperationPolicy {
-    Blocking,
-    Nonblocking,
-}
-trait OpPolicy/*  for OperationPolicy*/{
-    fn as_match(&self) -> OperationPolicy;
-}
-
-impl  OpPolicy for OperationPolicy {
-    fn as_match(&self) -> OperationPolicy {
-        match self {
-            OperationPolicy::One => OperationPolicy::One,
-            OperationPolicy::Two => OperationPolicy::Two,
-        }
-    }
-}*/
-
 pub enum MessageResult {
     Ok,
     Empty,
@@ -48,7 +31,7 @@ impl<Message> MessageQueue<Message> {
         }
     }
 
-    pub fn push<const policy: bool>(&self, message: Message) -> MessageResult {
+    pub fn push<const POLICY: bool>(&self, message: Message) -> MessageResult {
         if self.is_closed() {
             return MessageResult::Closed;
         }
@@ -56,7 +39,7 @@ impl<Message> MessageQueue<Message> {
             let mut lk = self.m_mtx.lock().unwrap();
             // let lk = &mut *self.m_mtx.lock().unwrap();
             if (lk).len() == self.m_queue_size {
-                if matches!(policy,false) {
+                if matches!(POLICY, false) {
                     return MessageResult::Full;
                 } else {
                     //assert!();
@@ -64,7 +47,7 @@ impl<Message> MessageQueue<Message> {
                     lk = self
                         .m_pushCv
                         .wait_while(lk, move |pending: &mut Vec<Message>| {
-                            return self.is_closed() || !(&*pending).is_empty();
+                            return self.is_closed() || !(&*pending).len() < self.m_queue_size;
                         })
                         .unwrap();
                     if self.is_closed() {
@@ -75,23 +58,22 @@ impl<Message> MessageQueue<Message> {
             //let mut lk_push = self.m_mtx.lock().unwrap();
             (lk).push(message);
         }
-        self.m_PopCv.notify_one();
+        self.m_pushCv.notify_one();
 
         return MessageResult::Ok;
     }
 
-    pub fn pop<const policy:bool>(&self) -> (Option<Message>, MessageResult)
-    {
+    pub fn pop<const POLICY: bool>(&self) -> (Option<Message>, MessageResult) {
         if self.is_closed() {
             return (None, MessageResult::Closed);
         }
 
-        let msg: Message;
+        let msg: Option<Message>;
         {
             //unique lock
             let mut lk = self.m_mtx.lock().unwrap();
             if (*lk).len() == self.m_queue_size {
-                if matches!(policy, false) {
+                if matches!(POLICY, false) {
                     return (None, MessageResult::Full);
                 } else {
                     //assert!();
@@ -106,11 +88,11 @@ impl<Message> MessageQueue<Message> {
                     }
                 }
             }
-            msg = (*lk).pop().unwrap();
+            msg = (*lk).pop();
             //self.m_queue.pop();
         }
-        self.m_pushCv.notify_one();
-        return (Some(msg), MessageResult::Ok);
+        self.m_PopCv.notify_one();
+        return (msg, MessageResult::Ok);
     }
 
     pub fn get(&self, predicate: &dyn Fn(&Message) -> bool) -> (Option<Message>, MessageResult) {
@@ -118,12 +100,14 @@ impl<Message> MessageQueue<Message> {
             return (None, MessageResult::Closed);
         }
 
-        let msg: Option<Message>;
+        let mut msg: Option<Message>= None;
         {
             let mut lk = self.m_mtx.lock().unwrap();
 
-            let index_elem = ((*lk).iter().position(predicate)).unwrap();
-            msg = Some((*lk).swap_remove(index_elem));
+            let index_elem = (*lk).iter().position(predicate);
+            if index_elem.is_some(){
+                msg = Some((*lk).swap_remove(index_elem.unwrap()));
+            }
         }
         self.m_pushCv.notify_one();
         return (msg, MessageResult::Ok);
