@@ -11,23 +11,21 @@ pub enum MessageResult {
 
 pub struct MessageQueue<Message> {
     m_mtx: Mutex<Vec<Message>>,
-    m_PopCv: Condvar,
-    m_pushCv: Condvar,
+    m_pop_cvr: Condvar,
+    m_push_cvr: Condvar,
     m_queue_size: usize,
     //for no blocking while check state
-    m_state: AtomicBool,
-    //PolicyBlocking: bool,
+    m_state_closed: AtomicBool,
 }
 
 impl<Message> MessageQueue<Message> {
     pub fn new(queue_size: usize) -> Self {
         Self {
             m_mtx: Mutex::new(vec![]),
-            m_PopCv: Condvar::new(),
-            m_pushCv: Condvar::new(),
+            m_pop_cvr: Condvar::new(),
+            m_push_cvr: Condvar::new(),
             m_queue_size: queue_size,
-            m_state: AtomicBool::new(false),
-            //PolicyBlocking:false,
+            m_state_closed: AtomicBool::new(false),
         }
     }
 
@@ -45,7 +43,7 @@ impl<Message> MessageQueue<Message> {
                     //assert!();
                     // let y = &mut *lk;
                     lk = self
-                        .m_pushCv
+                        .m_push_cvr
                         .wait_while(lk, move |pending: &mut Vec<Message>| {
                             return self.is_closed() || !(&*pending).len() < self.m_queue_size;
                         })
@@ -55,10 +53,9 @@ impl<Message> MessageQueue<Message> {
                     }
                 }
             }
-            //let mut lk_push = self.m_mtx.lock().unwrap();
             (lk).push(message);
         }
-        self.m_pushCv.notify_one();
+        self.m_pop_cvr.notify_one();
 
         return MessageResult::Ok;
     }
@@ -72,13 +69,13 @@ impl<Message> MessageQueue<Message> {
         {
             //unique lock
             let mut lk = self.m_mtx.lock().unwrap();
-            if (*lk).len() == self.m_queue_size {
+            if (*lk).is_empty() {
                 if matches!(POLICY, false) {
-                    return (None, MessageResult::Full);
+                    return (None, MessageResult::Empty);
                 } else {
                     //assert!();
                     lk = self
-                        .m_PopCv
+                        .m_pop_cvr
                         .wait_while(lk, move |pending: &mut Vec<Message>| {
                             return self.is_closed() || !(&*pending).is_empty();
                         })
@@ -91,7 +88,7 @@ impl<Message> MessageQueue<Message> {
             msg = (*lk).pop();
             //self.m_queue.pop();
         }
-        self.m_PopCv.notify_one();
+        self.m_push_cvr.notify_one();
         return (msg, MessageResult::Ok);
     }
 
@@ -100,27 +97,30 @@ impl<Message> MessageQueue<Message> {
             return (None, MessageResult::Closed);
         }
 
-        let mut msg: Option<Message>= None;
+        let mut msg: Option<Message> = None;
         {
             let mut lk = self.m_mtx.lock().unwrap();
 
             let index_elem = (*lk).iter().position(predicate);
-            if index_elem.is_some(){
+            if index_elem.is_some() {
                 msg = Some((*lk).swap_remove(index_elem.unwrap()));
             }
+            else{
+                return (None,MessageResult::NotFound);
+            }
         }
-        self.m_pushCv.notify_one();
+        self.m_push_cvr.notify_one();
         return (msg, MessageResult::Ok);
     }
 
     pub fn close(&self) -> MessageResult {
-        self.m_state.store(true, Ordering::Relaxed);
-        self.m_PopCv.notify_all();
-        self.m_pushCv.notify_all();
+        self.m_state_closed.store(true, Ordering::Relaxed);
+        self.m_pop_cvr.notify_all();
+        self.m_push_cvr.notify_all();
         return MessageResult::Ok;
     }
 
     pub fn is_closed(&self) -> bool {
-        return self.m_state.load(Ordering::Relaxed);
+        return self.m_state_closed.load(Ordering::Relaxed);
     }
 }

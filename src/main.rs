@@ -84,9 +84,9 @@ fn main() {
                         .push::<false>(i.to_string());
                 }
                 if matches!(result, MessageResult::Ok) {
-                    println!("push operation succeeded");
+                    println!("push operation succeeded, thread id: {:?}",thread_id);
                 } else {
-                    println!("push operation errored");
+                    println!("push operation errored, thread id: {:?}",thread_id);
                 }
             }
         }));
@@ -97,12 +97,12 @@ fn main() {
     context.stop.store(true, Ordering::Relaxed);
 
     for reader in readers {
-        if (!reader.is_finished()) {
+        if !reader.is_finished() {
             reader.join();
         }
     }
     for writer in writers {
-        if (!writer.is_finished()) {
+        if !writer.is_finished() {
             writer.join();
         }
     }
